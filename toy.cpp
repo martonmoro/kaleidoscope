@@ -186,3 +186,93 @@ std::unique_ptr<PrototypeAST> LogErrorP(const char *Str)
     LogError(Str);
     return nullptr;
 }
+
+// For eacg production in the grammar, we'll define a function which parses that production.
+
+// For numberic literals:
+// this expexts to be called when the current token is a `tok_number` token.
+// it takes the current number value, creates a `NumberExprAST` node, advances the lexer to the next token, and finally returns
+
+// numberexpr ::= number
+static std::unique_ptr<ExprAST> ParseNumberExpr()
+{
+    auto Result = std::make_unique<NumberExprAST>(NumVal);
+    getNextToken(); // consume the number
+    return std::move(Result);
+}
+
+//  Note that parentheses do not cause construction of AST nodes themselves.
+// While we could do it this way, the most important role of parentheses are to guide the parser and provide grouping.
+// Once the parser constructs the AST, parentheses are not needed.
+// parenexpr ::= '(' expression ')'
+static std::unique_ptr<ExprAST> ParseParenExpr()
+{
+    getNextToken(); // eat (
+    auto V = ParseExpression();
+    if (!V)
+        return nullptr;
+
+    if (CurTok != ')')
+        return LogError("expected ')'");
+    getNextToken(); // eat )
+    return V;
+}
+
+// identifierexpr
+//  ::= identifier
+//  ::= identifier '(' expression* ')'
+static std::unique_ptr<ExprAST> ParseIdentifierExpr()
+{
+    std::string IdName = IdentifierStr;
+
+    getNextToken(); // eat identifier
+
+    // using look-ahead to determine if the current identifier is a stand alone variable reference or if it is a function call expr
+    if (CurTok != '(') // Simple variable ref.
+        return std::make_unique<VariableExprAST>(IdName);
+
+    // Call
+    getNextToken(); // eat (
+    std::vector<std::unique_ptr<ExprAST>> Args;
+    if (CurTok != ')')
+    {
+        while (true)
+        {
+            if (auto Arg = ParseExpression())
+                Args.push_back(std::move(Arg));
+            else
+                return nullptr;
+
+            if (CurTok == ')')
+                break;
+
+            if (CurTok != ',')
+                return LogError("Expected ')' or ',' in argument list");
+            getNextToken();
+        }
+    }
+
+    // Eat the ')'
+    getNextToken();
+
+    return std::make_unique<CallExprAST>(IdName, std::move(Args));
+}
+
+/// primary
+///   ::= identifierexpr
+///   ::= numberexpr
+///   ::= parenexpr
+static std::unique_ptr<ExprAST> ParsePrimary()
+{
+    switch (CurTok)
+    {
+    default:
+        return LogError("unknown token when expecting an expression");
+    case tok_identifier:
+        return ParseIdentifierExpr();
+    case tok_number:
+        return ParseNumberExpr();
+    case '(':
+        return ParseParenExpr();
+    }
+}
