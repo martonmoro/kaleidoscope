@@ -1,5 +1,6 @@
 #include <string>
 #include <vector>
+#include <map>
 // ======== LEXER ========
 // The lexer returns token [0-255] if it is an unknown character, otherwise one of these for known things
 enum Token
@@ -274,5 +275,97 @@ static std::unique_ptr<ExprAST> ParsePrimary()
         return ParseNumberExpr();
     case '(':
         return ParseParenExpr();
+    }
+}
+
+// Binary Expression Parsing - Operator-Precedence Parsing
+
+// BinopPrecedence - This holds the precedence for each binary operator that is defined
+static std::map<char, int> BinopPrecendence;
+
+// GetTokPrecedence - Get the precedence of the pending binary operator token
+static int GetTokPrecedence()
+{
+    if (!isascii(CurTok))
+        return -1;
+
+    // make sure it's a declared binop
+    int TokPrec = BinopPrecendence[CurTok];
+    if (TokPrec <= 0)
+        return -1;
+    return TokPrec;
+}
+
+// int main
+// {
+//     // Install standard binary operators.
+//     // 1 is lowest precedence.
+//     BinopPrecedence['<'] = 10;
+//     BinopPrecedence['+'] = 20;
+//     BinopPrecedence['-'] = 20;
+//     BinopPrecedence['*'] = 40; // highest.
+// }
+
+// an expression is a primary expression potentially followed by a sequence of [binop,primaryexpr] pairs:
+// expression
+//   ::= primary binoprhs
+
+static std::unique_ptr<ExprAST> ParseExpression()
+{
+    auto LHS = ParsePrimary();
+    if (!LHS)
+        return nullptr;
+
+    return ParseBinOpRHS(0, std::move(LHS));
+}
+
+// `ParseBinOpRHS` is the function that parses the sequence of pairs
+// It takes a precedence and a pointer to an expression for the part that has been parsed so far.
+// The precedence value passed into `ParseBinOpRHS` indicates the minimal operator precedence that the function is allowed to eat.
+// For example, if the current pair stream is [+, x] and `ParseBinOpRHS` is passed in a precedence of 40, it will not consume any tokens because the precedence of '+' is only 20
+
+// binoprhs
+//   ::= ('+' primary)*
+static std::unique_ptr<ExprAST> ParseBinOpRHS(int ExprPrec, std::unique_ptr<ExprAST> LHS)
+{
+
+    // this code gets the precedence of the current token and checks to see if it is too low.
+    // Because we defined invalid tokens to have a precedence of -1, this check implicitly knows that the
+    // pair-stream ends when the token stream runs out of binary operators.
+    // If this check succeeds, we know that the token is a binary operator and that it will be included in this expression
+
+    // if this is a binop, find its precedence
+    while (true)
+    {
+        int TokPrec = GetTokPrecedence();
+
+        // if this is a binop that binds at least as tightly as the current binop,
+        // consume it, otherwise we are done.
+        if (TokPrec < ExprPrec)
+            return LHS;
+
+        // Okay, we know this is a binop.
+        int BinOp = CurTok;
+        getNextToken(); // eat binop
+
+        // Parse the primary expression after the binary operator.
+        auto RHS = ParsePrimary();
+        if (!RHS)
+            return nullptr;
+
+        // If Binop binds less tightly with RHS than the operator after RHS, let
+        // the pending operator take RHS as its LHS.
+        // If the precedence of the binop to the right of "RHS" is lower or equal to the precedence of our current operator,
+        // then we know that the parantheses associate as “(a+b) binop …”.
+        int NextPrec = GetTokPrecedence();
+        if (TokPrec < NextPrec)
+        {
+            RHS = ParseBinOpRHS(TokPrec + 1, std::move(RHS));
+            if (!RHS)
+                return nullptr;
+        }
+
+        // Merge LHS/RHS
+        LHS = std::make_unique<BinaryExprAST>(BinOp, std::move(LHS), std::move(RHS));
     }
 }
