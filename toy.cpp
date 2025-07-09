@@ -161,3 +161,28 @@ public:
 
 // ======== Parser ========
 // Combination of Recursive Descent Parser and Operator-Precedence Parser
+
+// CurTok/getNextToken - Provide a simple token buffer. CurTok is the current
+// token the parser is looking at. getNextToken reads another token from the\
+// lexer and updates CurTok with its result.
+// This implements a simple token buffer around the lexer. This allows us to look one token ahead
+// at what the lexer is returning.
+// Every function in the parser will assume that CurTok is the current token that needs to be parsed.
+static int CurTok;
+static int getNextToken()
+{
+    return CurTok = gettok();
+}
+
+// LogError* - Helper functions for error handling.
+std::unique_ptr<ExprAST> LogError(const char *Str)
+{
+    fprintf(stderr, "Error: %s\n", Str);
+    return nullptr;
+}
+
+std::unique_ptr<PrototypeAST> LogErrorP(const char *Str)
+{
+    LogError(Str);
+    return nullptr;
+}
