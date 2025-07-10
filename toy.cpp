@@ -1,6 +1,24 @@
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
-#include <map>
+
+using namespace llvm;
 // ======== LEXER ========
 // The lexer returns token [0-255] if it is an unknown character, otherwise one of these for known things
 enum Token
@@ -82,11 +100,21 @@ static int gettok()
 }
 
 // ======== AST ========
+
+// The codegen() method says to emit IR for that AST node along with all the things it depends on, and they all return an LLVM Value object.
+// "Value" is the class used to represent a Static Single Assignment (SSA) register or SSA value in LLVM.
+// The most distinct aspect of SSA values is that their value is computed as the related instruction executes, and it does not get a new
+// value until (and if) the instruction re-executes (i.e. there is no way to "change" and SSA value).
+
+// Note: instead of adding virtual methods to the ExprAST class hierarchy, it could also make sense to use a visitor pattern or some other
+// way to model this.
+
 // ExprAST - Base class for all expression nodes
 class ExprAST
 {
 public:
     virtual ~ExprAST() = default;
+    virtual Value *codegen() = 0;
 };
 
 // NumberExprAST - Experssion class for numberic literals like "1.0"
@@ -97,6 +125,7 @@ class NumberExprAST : public ExprAST
 
 public:
     NumberExprAST(double Val) : Val(Val) {}
+    Value *codegen() override;
 };
 
 // VariableExprAST - Expression class for referencing a variable, like "a"
@@ -419,6 +448,49 @@ static std::unique_ptr<FunctionAST> ParseTopLevelExpr()
         auto Proto = std::make_unique<PrototypeAST>("", std::vector<std::string>());
         return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
     }
+    return nullptr;
+}
+
+// ======== CODE GENERATION ========
+
+// The static variables will be used during code generation.
+
+// `TheContext` is an opaque object that owns a lot of core LLVM data structures, such as the type and constant value tables.
+// LLVM uses contexts to isulate different parts of the compiler (e.g., if we were compiling multiple modules in parallel,
+// each would need its own context)
+// It ensures that constants and types are unique within a given context
+static std::unique_ptr<LLVMContext> TheContext;
+// The `Builder` object is a helper object that makes it easy to generate LLVM instructions. Instances of the `IRBuilder` class template
+// keep track of the current place to insert instructions and has methods to create new instructions.
+// It keeps track of the current insertion point (where the next instruction will go in a function's basic book)
+// Provides methods like `CreateAdd()`, `CreateLoad()`, etc., to generate IR instructions without manually constructing them
+static std::unique_ptr<IRBuilder<>> Builder;
+// `TheModule` is an LLVM construct that contains functions and global variables. In many ways, it is the top-level structure that the
+// LLVM IR uses to contain code. It will own the memory for all of the IR that we generate, which is why the `codegen()` method returns
+// a raw `Value*`, rather than a `unique_ptr<Value>`
+// All the IR we generate lives in a module.
+static std::unique_ptr<Module> TheModule;
+// The `NamedValues` map keeps track of which values are defined in the current scope and what their LLVM representation is. (In other
+// words, it is a symbol table for the code). In this form of Kaleidoscope, the only things that can be referenced are function parameters.
+// As such, function parameters will be in this map when generating code for their function body.
+// Used to look up values when generating IR for variable references.
+
+// Example:
+// When parsing a function like def foo(x), the compiler:
+//  Creates a function in TheModule.
+//  Uses Builder to generate IR for the function body.
+//  Stores the parameter x in NamedValues so it can be referenced later.
+
+// When parsing an expression like x + 1, the compiler:
+//  Looks up x in NamedValues.
+//  Uses Builder to create an add instruction.
+
+// The resulting IR is part of TheModule.
+static std::map<std::string, Value *> NamedValues;
+
+Value *LogErrorV(const char *Str)
+{
+    LogError(Str);
     return nullptr;
 }
 
