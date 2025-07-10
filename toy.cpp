@@ -115,7 +115,7 @@ class BinaryExprAST : public ExprAST
     std::unique_ptr<ExprAST> LHS, RHS;
 
 public:
-    BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS, std::unique_ptr<ExprAST> RIHS) : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+    BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS, std::unique_ptr<ExprAST> RHS) : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
 };
 
 // ClassExprAST - Expression class for function calls
@@ -187,6 +187,8 @@ std::unique_ptr<PrototypeAST> LogErrorP(const char *Str)
     LogError(Str);
     return nullptr;
 }
+
+static std::unique_ptr<ExprAST> ParseExpression();
 
 // For eacg production in the grammar, we'll define a function which parses that production.
 
@@ -281,7 +283,7 @@ static std::unique_ptr<ExprAST> ParsePrimary()
 // Binary Expression Parsing - Operator-Precedence Parsing
 
 // BinopPrecedence - This holds the precedence for each binary operator that is defined
-static std::map<char, int> BinopPrecendence;
+static std::map<char, int> BinopPrecedence;
 
 // GetTokPrecedence - Get the precedence of the pending binary operator token
 static int GetTokPrecedence()
@@ -290,33 +292,10 @@ static int GetTokPrecedence()
         return -1;
 
     // make sure it's a declared binop
-    int TokPrec = BinopPrecendence[CurTok];
+    int TokPrec = BinopPrecedence[CurTok];
     if (TokPrec <= 0)
         return -1;
     return TokPrec;
-}
-
-// int main
-// {
-//     // Install standard binary operators.
-//     // 1 is lowest precedence.
-//     BinopPrecedence['<'] = 10;
-//     BinopPrecedence['+'] = 20;
-//     BinopPrecedence['-'] = 20;
-//     BinopPrecedence['*'] = 40; // highest.
-// }
-
-// an expression is a primary expression potentially followed by a sequence of [binop,primaryexpr] pairs:
-// expression
-//   ::= primary binoprhs
-
-static std::unique_ptr<ExprAST> ParseExpression()
-{
-    auto LHS = ParsePrimary();
-    if (!LHS)
-        return nullptr;
-
-    return ParseBinOpRHS(0, std::move(LHS));
 }
 
 // `ParseBinOpRHS` is the function that parses the sequence of pairs
@@ -368,6 +347,19 @@ static std::unique_ptr<ExprAST> ParseBinOpRHS(int ExprPrec, std::unique_ptr<Expr
         // Merge LHS/RHS
         LHS = std::make_unique<BinaryExprAST>(BinOp, std::move(LHS), std::move(RHS));
     }
+}
+
+// an expression is a primary expression potentially followed by a sequence of [binop,primaryexpr] pairs:
+// expression
+//   ::= primary binoprhs
+
+static std::unique_ptr<ExprAST> ParseExpression()
+{
+    auto LHS = ParsePrimary();
+    if (!LHS)
+        return nullptr;
+
+    return ParseBinOpRHS(0, std::move(LHS));
 }
 
 // prototype
@@ -428,4 +420,93 @@ static std::unique_ptr<FunctionAST> ParseTopLevelExpr()
         return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
     }
     return nullptr;
+}
+
+// ======== TOP-LEVEL PARSING ========
+
+static void HandleDefinition()
+{
+    if (ParseDefinition())
+    {
+        fprintf(stderr, "Parsed a function definition.\n");
+    }
+    else
+    {
+        // skip token for error recovery
+        getNextToken();
+    }
+}
+
+static void HandleExtern()
+{
+    if (ParseExtern())
+    {
+        fprintf(stderr, "Parsed an extern\n");
+    }
+    else
+    {
+        // Skip token for error recovery.
+        getNextToken();
+    }
+}
+
+static void HandleTopLevelExpression()
+{
+    // Evaluate a top-level expression into an anonymous function.
+    if (ParseTopLevelExpr())
+    {
+        fprintf(stderr, "Parsed a top-level expr\n");
+    }
+    else
+    {
+        // Skip token for error recovery.
+        getNextToken();
+    }
+}
+
+// top ::= definition | external | expression | ';'
+static void MainLoop()
+{
+    while (true)
+    {
+        fprintf(stderr, "ready> ");
+        switch (CurTok)
+        {
+        case tok_eof:
+            return;
+        case ';': // ignore top-level semicolons
+            getNextToken();
+            break;
+        case tok_def:
+            HandleDefinition();
+            break;
+        case tok_extern:
+            HandleExtern();
+            break;
+        default:
+            HandleTopLevelExpression();
+            break;
+        }
+    }
+}
+
+// ======== MAIN DRIVER CODE ========
+
+int main()
+{
+    // Install standard binary operators.
+    // 1 is lowest precedence.
+    BinopPrecedence['<'] = 10;
+    BinopPrecedence['+'] = 20;
+    BinopPrecedence['-'] = 20;
+    BinopPrecedence['*'] = 40; // highest
+
+    // Prime the first token
+    fprintf(stderr, "ready> ");
+    getNextToken();
+
+    // Run the main "interpreter loop" now
+    MainLoop();
+
+    return 0;
 }

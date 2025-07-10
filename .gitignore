@@ -1,0 +1,9 @@
+# Executables
+a.out
+*.out
+
+# macOS debug symbols
+*.dSYM/
+
+# Object files
+*.o
