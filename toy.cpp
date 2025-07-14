@@ -174,6 +174,7 @@ public:
     PrototypeAST(const std::string &Name, std::vector<std::string> Args)
         : Name(Name), Args(std::move(Args)) {}
 
+    Function *codegen();
     const std::string &getName() const { return Name; }
 };
 
@@ -190,6 +191,7 @@ public:
     FunctionAST(std::unique_ptr<PrototypeAST> Proto,
                 std::unique_ptr<ExprAST> Body)
         : Proto(std::move(Proto)), Body(std::move(Body)) {}
+    Function *codegen();
 };
 
 // ======== Parser ========
@@ -583,6 +585,98 @@ Value *CallExprAST::codegen()
     }
 
     return Builder->CreateCall(CalleeF, ArgsV, "calltmp");
+}
+
+// This function returns a "Function*" instead of a "Value*". Beause a "prototype" really talks about the external
+// interface for a function and not the value computed by an expression.
+//
+// The call to `Function::get` creates a `FunctionType` that should be used for a given Prototype. Since all function
+// arguments in Kaleidoscope are of type double, the first line creates a vector of "N" LLVM double types. It then
+// uses the `FunctionType::get` method to create a function type that takes "N" doubles as arguments, returns one double
+// as a result, and that is not vararg (the false parameter indicates this).
+// Note that Types in LLBM are uniqued just like Constants are, so you don't "new" a type, you "get" it.
+//
+// The final line creates the IR Function corresponding to the Prototype. This indicates the type, linkage and name to use,
+// as well as which module to insert into. "external linkage" means that the function may be defined outside the current
+// module and/or that it is callable by functions outside the module. The Name passed in is the name the user specified:
+// since `TheModule` is specified, this name is registered in the `TheModule`'s symbol table.
+//
+// Finally, we set the name of each of the function's arguments according to the names given in the Prototype. This step
+// isn't strictly necessary, but keeping the names consistent makes the IR more readable, and allows subsequent code to
+// refer directly to the arguments for their names, rather than having to look them up in the Prototype AST.
+Function *PrototypeAST::codegen()
+{
+    // Make the function type: double(double,double) etc.
+    std::vector<Type *> Doubles(Args.size(), Type::getDoubleTy(*TheContext));
+
+    FunctionType *FT = FunctionType::get(Type::getDoubleTy(*TheContext), Doubles, false);
+
+    Function *F = Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+
+    unsigned Idx = 0;
+    for (auto &Arg : F->args())
+        Arg.setName(Args[Idx++]);
+
+    return F;
+}
+
+// For function definitions, we start by searching `TheModule`'s symbol table for an existing version of this function,
+// in case one has already been created using an 'extern' statement. If `Module::getFunction` returns null then no
+// previous version exists, so we'll codegen one from the Prototype. In either case, we want to assert that the function
+// is empty (i.e. has no body yet) before we start.
+//
+// Builder setup: The first line creates a new basic block (named "entry"), which is inserted into `TheFunction`.
+// The second line then tells the builder that new instructions should be inserted into the end of the new basic block.
+// Basic blocks in LLVM are an important part of functions that define the Control Flow Graph.
+//
+// Next we add the function arguments to the `NamedValues` map so that they are accessible to `VariableExprAST` nodes.
+//
+// Once the insertion point has been set up and the `NamedValues` map populated, we call the `codegen()` method for the
+// root expression of the function. If no error happens, this emits code to compute the expression into the entry block
+// and returns the value that was computed. Assuming no error, we then create an LLVM ret instruction, which completes
+// the function. Once the function is built, we call `verifyFunction`, which is provided by LLVM. This function does a
+// variety of consistency checks on the generated code, to determine if our compiler is doing everything right. Using
+// this is important.
+//
+// We handle the error case by merely deleting the function we produced with the `eraseFromParent` method. This allows
+// the user to redefine a function that they incorrectly typed in before.
+Function *FunctionAST::codegen()
+{
+    // First, check for an existing function from a previous 'extern' declaration
+    Function *TheFunction = TheModule->getFunction(Proto->getName());
+
+    if (!TheFunction)
+        TheFunction = Proto->codegen();
+
+    if (!TheFunction)
+        return nullptr;
+
+    if (!TheFunction->empty())
+        return (Function *)LogErrorV("Function cannot be redefined.");
+
+    // Create a new basic block to start insertion into.
+    BasicBlock *BB = BasicBlock::Create(*TheContext, "entry", TheFunction);
+    Builder->SetInsertPoint(BB);
+
+    // Record the function arguments in the `NamedValues` map.
+    NamedValues.clear();
+    for (auto &Arg : TheFunction->args())
+        NamedValues[std::string(Arg.getName())] = &Arg;
+
+    if (Value *RetVal = Body->codegen())
+    {
+        // Finish off the function
+        Builder->CreateRet(RetVal);
+
+        // Validate the generated code, checking for consistency
+        verifyFunction(*TheFunction);
+
+        return TheFunction;
+    }
+
+    // Error reading body, remove function
+    TheFunction->eraseFromParent();
+    return nullptr;
 }
 
 // ======== TOP-LEVEL PARSING ========
