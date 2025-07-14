@@ -681,24 +681,47 @@ Function *FunctionAST::codegen()
 
 // ======== TOP-LEVEL PARSING ========
 
+static void InitializeModule()
+{
+    // Open a new context and module
+    TheContext = std::make_unique<LLVMContext>();
+    TheModule = std::make_unique<Module>("my cool jit", *TheContext);
+
+    // Create a new builder for the module
+    Builder = std::make_unique<IRBuilder<>>(*TheContext);
+}
+
 static void HandleDefinition()
 {
-    if (ParseDefinition())
+    // Calls the parser to convert the input token into an AST
+    if (auto FnAST = ParseDefinition())
     {
-        fprintf(stderr, "Parsed a function definition.\n");
+        // Call the code generation method on the parsed AST
+        if (auto *FnIR = FnAST->codegen())
+        {
+            fprintf(stderr, "Read function definition:\n");
+            // Print generated LLVM IR (errs() is LLVM's error output stream)
+            FnIR->print(errs());
+            fprintf(stderr, "\n");
+        }
     }
     else
     {
-        // skip token for error recovery
+        // Skip token for error recovery.
         getNextToken();
     }
 }
 
 static void HandleExtern()
 {
-    if (ParseExtern())
+    if (auto ProtoAST = ParseExtern())
     {
-        fprintf(stderr, "Parsed an extern\n");
+        if (auto *FnIR = ProtoAST->codegen())
+        {
+            fprintf(stderr, "Read extern:\n");
+            FnIR->print(errs());
+            fprintf(stderr, "\n");
+        }
     }
     else
     {
@@ -710,9 +733,17 @@ static void HandleExtern()
 static void HandleTopLevelExpression()
 {
     // Evaluate a top-level expression into an anonymous function.
-    if (ParseTopLevelExpr())
+    if (auto FnAST = ParseTopLevelExpr())
     {
-        fprintf(stderr, "Parsed a top-level expr\n");
+        if (auto *FnIR = FnAST->codegen())
+        {
+            fprintf(stderr, "Read top-level expression:\n");
+            FnIR->print(errs());
+            fprintf(stderr, "\n");
+
+            // Remove the anonymous expression.
+            FnIR->eraseFromParent();
+        }
     }
     else
     {
@@ -756,14 +787,20 @@ int main()
     BinopPrecedence['<'] = 10;
     BinopPrecedence['+'] = 20;
     BinopPrecedence['-'] = 20;
-    BinopPrecedence['*'] = 40; // highest
+    BinopPrecedence['*'] = 40; // highest.
 
-    // Prime the first token
+    // Prime the first token.
     fprintf(stderr, "ready> ");
     getNextToken();
 
-    // Run the main "interpreter loop" now
+    // Make the module, which holds all the code.
+    InitializeModule();
+
+    // Run the main "interpreter loop" now.
     MainLoop();
+
+    // Print out all of the generated code.
+    TheModule->print(errs(), nullptr);
 
     return 0;
 }
